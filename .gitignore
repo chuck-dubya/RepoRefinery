@@ -1,0 +1,74 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Virtual environment
+.env
+*.env
+
+# pyenv
+.python-version
+
+# pytest cache
+.pytest_cache/
+.tox/
+.nox/
+
+# Coverage reports
+coverage/
+*.cover
+.hypothesis/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+.pyre/
+
+# VS Code settings
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+
+# Project specific: ignore test reports, etc.
+reports/
+output/
+logs/
+
+# Ignore anything in utils/__pycache__ or other caches
+utils/__pycache__/
+utils/*.py[cod]
+
+# Ignore local configuration files
+config.ini

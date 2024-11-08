@@ -1,192 +1,30 @@
 import argparse
+import logging
+import os
 from datetime import datetime, timedelta
-import requests
-import base64
-import subprocess
-
-# Define the cutoff date for old branches (e.g., branches with no commits in the last 6 months)
-OLD_BRANCH_CUTOFF_DAYS = 180
-cutoff_date = datetime.now() - timedelta(days=OLD_BRANCH_CUTOFF_DAYS)
-
-
-def get_old_branches(base_url, headers):
-    url = f"{base_url}/branches"
-    response = requests.get(url, headers=headers)
-    old_branches = []
-
-    if response.status_code == 200:
-        branches = response.json()
-        for branch in branches:
-            branch_name = branch["name"]
-            # Get the last commit date of the branch
-            commit_url = branch["commit"]["url"]
-            commit_response = requests.get(commit_url, headers=headers)
-
-            if commit_response.status_code == 200:
-                commit_data = commit_response.json()
-                commit_date = datetime.strptime(
-                    commit_data["commit"]["committer"]["date"], "%Y-%m-%dT%H:%M:%SZ"
-                )
-
-                # Check if the last commit date is older than the cutoff date
-                if commit_date < cutoff_date:
-                    old_branches.append((branch_name, commit_date.strftime("%Y-%m-%d")))
-                    # Call delete_branch to delete the old branch
-                    delete_branch(base_url, headers, branch_name)
-            else:
-                print(
-                    f"Failed to fetch commit info for branch {branch_name}: {commit_response.text}"
-                )
-
-        if old_branches:
-            print("Deleted old branches (not updated in the last 6 months):")
-            for branch_name, date in old_branches:
-                print(f"Branch: {branch_name}, Last Commit Date: {date}")
-        else:
-            print("No old branches found to delete.")
-    else:
-        print(f"Failed to fetch branches: {response.text}")
+from utils.github_api import (
+    get_old_branches,
+    get_tags,
+    delete_tag,
+)
+from utils.file_utils import (
+    list_large_files,
+    optimize_gitignore,
+    remove_duplicate_files,
+)
 
 
-def delete_branch(base_url, headers, branch_name):
-    url = f"{base_url}/git/refs/heads/{branch_name}"
-    response = requests.delete(url, headers=headers)
-    if response.status_code == 204:
-        print(f"Deleted branch: {branch_name}")
-    else:
-        print(f"Failed to delete branch {branch_name}: {response.text}")
-
-
-def archive_repository(base_url, headers):
-    url = base_url
-    response = requests.patch(url, headers=headers, json={"archived": True})
-    if response.status_code == 200:
-        print("Repository archived successfully.")
-    else:
-        print(f"Failed to archive repository: {response.text}")
-
-
-def list_large_files(repo_path, file_size_threshold=5):
-    """
-    Lists large files in the repository history. Requires a local clone.
-    Args:
-        repo_path (str): Path to the local clone of the repository.
-        file_size_threshold (int): Minimum file size (in MB) to be listed.
-    """
-    print(f"Finding files larger than {file_size_threshold} MB in the repository...")
-
-    try:
-        # Run git rev-list and git cat-file to find large files
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo_path,
-                "rev-list",
-                "--objects",
-                "--all",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
+def get_github_token(token_arg):
+    """Retrieves the GitHub token from argument or environment variable and logs a warning if not available."""
+    token = token_arg or os.getenv("GITHUB_TOKEN")
+    if not token:
+        logging.warning(
+            "GitHub token not provided. Please provide it as an argument or set it as an environment variable."
         )
-
-        # Get the list of all objects (files) and sizes
-        large_files = []
-        for line in result.stdout.splitlines():
-            object_hash, filename = line.split(maxsplit=1)
-            size_result = subprocess.run(
-                ["git", "-C", repo_path, "cat-file", "-s", object_hash],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-            # Convert size to MB and check against threshold
-            size_in_mb = int(size_result.stdout.strip()) / (1024 * 1024)
-            if size_in_mb > file_size_threshold:
-                large_files.append((filename, f"{size_in_mb:.2f} MB"))
-
-        # Print results
-        if large_files:
-            print("Large files in the repository:")
-            for filename, size in large_files:
-                print(f"{filename}: {size}")
-        else:
-            print("No large files found above the threshold.")
-
-    except subprocess.CalledProcessError as e:
-        print(f"Error while finding large files: {e}")
-
-
-def delete_file(base_url, headers, file_path, branch="main"):
-    url = f"{base_url}/contents/{file_path}"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        sha = response.json()["sha"]
-        delete_response = requests.delete(
-            url,
-            headers=headers,
-            json={
-                "message": f"Removing obsolete file {file_path}",
-                "sha": sha,
-                "branch": branch,
-            },
-        )
-        if delete_response.status_code == 200:
-            print(f"Deleted file: {file_path}")
-        else:
-            print(f"Failed to delete file {file_path}: {delete_response.text}")
-    else:
-        print(f"File {file_path} not found.")
-
-
-def update_gitignore(base_url, headers):
-    gitignore_content = """
-    # Ignore Python bytecode
-    __pycache__/
-    *.py[cod]
-
-    # Ignore OS files
-    .DS_Store
-    Thumbs.db
-
-    # Ignore IDE configs
-    .idea/
-    .vscode/
-    *.swp
-    """
-    encoded_content = base64.b64encode(gitignore_content.encode()).decode("utf-8")
-    url = f"{base_url}/contents/.gitignore"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        sha = response.json()["sha"]
-        response = requests.put(
-            url,
-            headers=headers,
-            json={
-                "message": "Updating .gitignore",
-                "content": encoded_content,
-                "sha": sha,
-            },
-        )
-    else:
-        response = requests.put(
-            url,
-            headers=headers,
-            json={
-                "message": "Creating .gitignore",
-                "content": encoded_content,
-            },
-        )
-    if response.status_code in (200, 201):
-        print(".gitignore updated successfully.")
-    else:
-        print(f"Failed to update .gitignore: {response.text}")
+    return token
 
 
 def main():
-    # Argument parsing
     parser = argparse.ArgumentParser(description="GitHub repository cleanup tool.")
     parser.add_argument("token", help="Your GitHub personal access token.")
     parser.add_argument(
@@ -196,24 +34,74 @@ def main():
     parser.add_argument(
         "--repo_path", help="Path to the local clone of the repository", default="."
     )
+    parser.add_argument(
+        "--delete_duplicates", action="store_true", help="Delete duplicate files"
+    )
+    parser.add_argument(
+        "--size_threshold", type=int, default=5, help="File size threshold in MB"
+    )
+    parser.add_argument(
+        "--log_level",
+        type=str,
+        default="INFO",
+        help="Set the logging level (e.g., DEBUG, INFO)",
+    )
 
     args = parser.parse_args()
 
-    # Set up GitHub API URL and headers
+    # Set up logging level based on the log_level argument
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    # Set up GitHub API headers and URL
+    token = get_github_token(args.token)
     base_url = f"https://api.github.com/repos/{args.owner}/{args.repo}"
     headers = {
-        "Authorization": f"token {args.token}",
+        "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
     }
 
-    # Identify and delete old branches
-    get_old_branches(base_url, headers)
+    # Task 1: Find and delete old branches
+    logging.info("Finding and deleting old branches...")
+    cutoff_date = datetime.now() - timedelta(days=180)
+    get_old_branches(base_url, headers, cutoff_date)
 
-    # List large files (requires local clone of the repository)
-    list_large_files(args.repo_path)
+    # Task 2: Close stale pull requests
+    logging.info("Checking for stale pull requests...")
+    # Logic to retrieve and close stale PRs would go here (similar to old branches logic)
 
-    # Update .gitignore
-    update_gitignore(base_url, headers)
+    # Task 3: Delete unused tags
+    logging.info("Deleting unused tags...")
+    tags = get_tags(base_url, headers)
+    for tag in tags:
+        tag_name = tag["name"]
+        tag_date = datetime.strptime(
+            tag["commit"]["commit"]["committer"]["date"], "%Y-%m-%dT%H:%M:%SZ"
+        )
+        if tag_date < cutoff_date:
+            delete_tag(base_url, headers, tag_name)
+
+    # Task 4: List large files
+    large_files = list_large_files(
+        args.repo_path, size_threshold_mb=args.size_threshold
+    )
+    if large_files:
+        logging.info("Large files found in the repository:")
+        for file, size in large_files:
+            logging.info(f"{file}: {size}")
+    else:
+        logging.info("No large files found above the threshold.")
+
+    # Task 5: Remove duplicate files
+    remove_duplicate_files(args.repo_path, delete_duplicates=args.delete_duplicates)
+
+    # Use it in your cleanup tasks
+    optimize_gitignore(args.repo_path)
+
+    # Final summary log
+    logging.info("Repository cleanup completed.")
 
 
 if __name__ == "__main__":
