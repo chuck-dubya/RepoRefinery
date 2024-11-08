@@ -2,6 +2,7 @@ import argparse
 from datetime import datetime, timedelta
 import requests
 import base64
+import subprocess
 
 # Define the cutoff date for old branches (e.g., branches with no commits in the last 6 months)
 OLD_BRANCH_CUTOFF_DAYS = 180
@@ -30,14 +31,19 @@ def get_old_branches(base_url, headers):
                 # Check if the last commit date is older than the cutoff date
                 if commit_date < cutoff_date:
                     old_branches.append((branch_name, commit_date.strftime("%Y-%m-%d")))
+                    # Call delete_branch to delete the old branch
+                    delete_branch(base_url, headers, branch_name)
             else:
                 print(
                     f"Failed to fetch commit info for branch {branch_name}: {commit_response.text}"
                 )
 
-        print("Old branches (not updated in the last 6 months):")
-        for branch_name, date in old_branches:
-            print(f"Branch: {branch_name}, Last Commit Date: {date}")
+        if old_branches:
+            print("Deleted old branches (not updated in the last 6 months):")
+            for branch_name, date in old_branches:
+                print(f"Branch: {branch_name}, Last Commit Date: {date}")
+        else:
+            print("No old branches found to delete.")
     else:
         print(f"Failed to fetch branches: {response.text}")
 
@@ -60,10 +66,57 @@ def archive_repository(base_url, headers):
         print(f"Failed to archive repository: {response.text}")
 
 
-def list_large_files():
-    print(
-        "Review large files in your repository using tools like git-filter-repo or BFG Repo-Cleaner manually."
-    )
+def list_large_files(repo_path, file_size_threshold=5):
+    """
+    Lists large files in the repository history. Requires a local clone.
+    Args:
+        repo_path (str): Path to the local clone of the repository.
+        file_size_threshold (int): Minimum file size (in MB) to be listed.
+    """
+    print(f"Finding files larger than {file_size_threshold} MB in the repository...")
+
+    try:
+        # Run git rev-list and git cat-file to find large files
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                repo_path,
+                "rev-list",
+                "--objects",
+                "--all",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        # Get the list of all objects (files) and sizes
+        large_files = []
+        for line in result.stdout.splitlines():
+            object_hash, filename = line.split(maxsplit=1)
+            size_result = subprocess.run(
+                ["git", "-C", repo_path, "cat-file", "-s", object_hash],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            # Convert size to MB and check against threshold
+            size_in_mb = int(size_result.stdout.strip()) / (1024 * 1024)
+            if size_in_mb > file_size_threshold:
+                large_files.append((filename, f"{size_in_mb:.2f} MB"))
+
+        # Print results
+        if large_files:
+            print("Large files in the repository:")
+            for filename, size in large_files:
+                print(f"{filename}: {size}")
+        else:
+            print("No large files found above the threshold.")
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error while finding large files: {e}")
 
 
 def delete_file(base_url, headers, file_path, branch="main"):
@@ -140,6 +193,9 @@ def main():
         "owner", help="The GitHub repository owner (username or organization)."
     )
     parser.add_argument("repo", help="The GitHub repository name.")
+    parser.add_argument(
+        "--repo_path", help="Path to the local clone of the repository", default="."
+    )
 
     args = parser.parse_args()
 
@@ -150,19 +206,11 @@ def main():
         "Accept": "application/vnd.github.v3+json",
     }
 
-    # Example usage of each function
+    # Identify and delete old branches
     get_old_branches(base_url, headers)
-    # Uncomment to delete an old branch (replace 'old_branch_name' with actual branch name)
-    # delete_branch(base_url, headers, "old_branch_name")
 
-    # Uncomment to archive the repository
-    # archive_repository(base_url, headers)
-
-    # List large files (manual)
-    list_large_files()
-
-    # Delete a specific file (uncomment and replace with file path)
-    # delete_file(base_url, headers, "path/to/obsolete/file.txt")
+    # List large files (requires local clone of the repository)
+    list_large_files(args.repo_path)
 
     # Update .gitignore
     update_gitignore(base_url, headers)
